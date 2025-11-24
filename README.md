@@ -1,0 +1,2 @@
+# birdnetgo-friend
+Birdnetgo scripts
