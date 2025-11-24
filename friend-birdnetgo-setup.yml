@@ -1,0 +1,175 @@
+#install and configure birdnetgo: https://github.com/tphakala/birdnet-go?tab=readme-ov-file
+# after initial flashing assuming the following:
+# - birdington user exists and has passwordless sudo
+#
+#After this script runs you will still need to:
+# - run the actual installation script as the ansible user (it's interactive)
+# - configure other birdnet settings from the UI
+
+#Make sure to run this playbook with the option -ask-pass -e 'ansible_user=birdington'
+
+- name: configure birdnetgo after initial installation
+  hosts: birdnetgo-friend
+  tasks:
+    - name: Set timezone to America/Chicago
+      become: true
+      community.general.timezone:
+        name: America/Chicago
+
+#this was recommended for birdnetpi, still gonna do for go
+    - name: set swap size to 2GB
+      lineinfile:
+        path: /etc/dphys-swapfile
+        regexp: '^CONF_SWAPSIZE='
+        line: 'CONF_SWAPSIZE=2048'
+      notify: reboot
+      become: true
+
+    - name: set swap max swap size to 4GB
+      lineinfile:
+        path: /etc/dphys-swapfile
+        regexp: '^CONF_MAXSWAP='
+        line: 'CONF_MAXSWAP=4096'
+      notify: reboot
+      become: true
+
+#Disable wifi power saving by creating a service that turns it off https://forums.raspberrypi.com/viewtopic.php?t=337943
+    - name: copy service config file to machine
+      copy:
+        src: '~/homelab-ansible/birdnetgo/config-files/wlan0pwr.service'
+        dest: '/etc/systemd/system/wlan0pwr.service'
+        owner: root
+        group: root
+        mode: '0644'
+      become: true
+      notify: reboot
+
+    - name: enable wlan0pwr.service
+      systemd_service:
+        name: wlan0pwr
+        enabled: true
+        state: started
+      become: true
+
+#end region
+
+    - name: load alsamixer settings for mic level
+      lineinfile:                                                                                                        
+        path: /etc/rc.local
+        insertbefore: '^exit 0'
+        line: /usr/sbin/alsactl restore
+        create: true
+      notify: reboot
+      become: true
+
+    - name: disable bluetooth
+      blockinfile:
+        path: /boot/firmware/config.txt
+        insertafter: ^\[all\]
+        block: |
+          # Disable Bluetooth
+          dtoverlay=disable-bt
+      notify: reboot
+      become: true
+
+#Configure hardware watchdog        
+    - name: set how often the watchdog must be reset
+      lineinfile:
+        path: '/etc/systemd/system.conf'
+        regexp: '^RuntimeWatchdogSec='
+        line: 'RuntimeWatchdogSec=10s'
+      notify: reboot
+      become: true
+
+    - name: keep the watchdog active during shutdown to detect hangs
+      lineinfile:
+        path: /etc/systemd/system.conf
+        regexp: '^ShutdownWatchdogSec='
+        line: 'ShutdownWatchdogSec=10min'
+      notify: reboot
+      become: true
+
+#setup the software watchdog to restart pi after 5 minutes without internet
+    - name: install the watchdog package
+      apt:
+        name: watchdog
+        update_cache: yes
+        cache_valid_time: 6000
+      become: true
+
+    - name: add files to watchdog.conf
+      blockinfile:
+        path: /etc/watchdog.conf
+        block: |
+          # Network monitoring
+          ping = 8.8.8.8 
+          ping = 1.1.1.1 
+          ping-count = 5
+
+          # Interface monitoring
+          interface = wlan0
+
+          # Basic settings
+          watchdog-device = none
+          retry-timeout = 300
+          realtime = yes
+          interval = 20
+      notify: reboot
+      become: true
+
+    - name: enable and start watchdog service
+      systemd_service:
+        name: watchdog
+        enabled: true
+        state: started
+      become: true
+
+#restart Network Manager if no successful ping every 2 minutes
+        
+    - name: create scripts directory if not present
+      become: true
+      file:
+        path: /opt/scripts
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: copy script file from playbook directory
+      become: true
+      copy:
+        src: "{{ playbook_dir }}/config-files/friend-restart-network.sh"
+        dest: "/opt/scripts/restart-network.sh"
+        owner: root
+        group: root
+        mode: '0754'
+
+    - name: add job to root crontab
+      become: true
+      cron:
+        name: "restart NetworkManager if down"
+        minute: "*/2"
+        job: /opt/scripts/restart-network.sh
+        user: root
+
+    - name: disable cron email alerts
+      become: true
+      community.general.cronvar:
+        name: MAILTO
+        value: "''"
+        user: root
+
+    - name: download birdnetgo installation script
+      get_url:
+        url: https://github.com/tphakala/birdnet-go/raw/main/install.sh
+        dest: /home/birdington/installer.sh
+        mode: '0774'
+        owner: birdington
+        group: birdington
+      become: true
+
+  handlers:
+    - name: reboot
+      reboot:
+        msg: "Rebooting..."
+      become: true
