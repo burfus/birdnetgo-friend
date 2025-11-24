@@ -3,7 +3,7 @@
 # - birdington user exists and has passwordless sudo
 #
 #After this script runs you will still need to:
-# - run the actual installation script as the ansible user (it's interactive)
+# - run the actual installation script as the birdington user (it's interactive)
 # - configure other birdnet settings from the UI
 
 #Make sure to run this playbook with the option -ask-pass -e 'ansible_user=birdington'
